@@ -61,7 +61,12 @@ export default function Home() {
     img.src = imageUrl;
   };
 
-  const getMousePos = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  // Shared coordinate extractor — works for both mouse and touch events.
+  // clientX/clientY come directly from mouse events, but from
+  // e.touches[0] (the first finger) on touch events.
+  const getPosFromEvent = (
+    e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>
+  ) => {
     const canvas = drawCanvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
 
@@ -69,9 +74,22 @@ export default function Home() {
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
 
+    let clientX: number;
+    let clientY: number;
+
+    if ("touches" in e) {
+      // Touch event (iPhone/iPad)
+      clientX = e.touches[0].clientX;
+      clientY = e.touches[0].clientY;
+    } else {
+      // Mouse event (desktop/laptop)
+      clientX = e.clientX;
+      clientY = e.clientY;
+    }
+
     return {
-      x: (e.clientX - rect.left) * scaleX,
-      y: (e.clientY - rect.top) * scaleY,
+      x: (clientX - rect.left) * scaleX,
+      y: (clientY - rect.top) * scaleY,
     };
   };
 
@@ -87,27 +105,31 @@ export default function Home() {
     setCanRedo(false);
   };
 
-  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  const startDrawing = (
+    e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>
+  ) => {
     const canvas = drawCanvasRef.current;
     const ctx = canvas?.getContext("2d");
     if (!ctx) return;
 
     saveSnapshot();
 
-    const { x, y } = getMousePos(e);
+    const { x, y } = getPosFromEvent(e);
     ctx.beginPath();
     ctx.moveTo(x, y);
     isDrawing.current = true;
   };
 
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  const continueDrawing = (
+    e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>
+  ) => {
     if (!isDrawing.current) return;
 
     const canvas = drawCanvasRef.current;
     const ctx = canvas?.getContext("2d");
     if (!ctx) return;
 
-    const { x, y } = getMousePos(e);
+    const { x, y } = getPosFromEvent(e);
 
     if (mode === "eraser") {
       ctx.globalCompositeOperation = "destination-out";
@@ -123,8 +145,28 @@ export default function Home() {
     ctx.stroke();
   };
 
-  const handleMouseUp = () => {
+  const stopDrawing = () => {
     isDrawing.current = false;
+  };
+
+  // Mouse handlers (desktop/laptop)
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => startDrawing(e);
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => continueDrawing(e);
+  const handleMouseUp = () => stopDrawing();
+
+  // Touch handlers (iPhone/iPad) — each calls preventDefault() first so the
+  // page doesn't scroll while you're tracing with your finger
+  const handleTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    startDrawing(e);
+  };
+  const handleTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    continueDrawing(e);
+  };
+  const handleTouchEnd = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    stopDrawing();
   };
 
   const handleUndo = () => {
@@ -162,7 +204,6 @@ export default function Home() {
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
 
-    // Save current state first so Clear is undoable, just like any stroke
     saveSnapshot();
     ctx.clearRect(0, 0, canvas.width, canvas.height);
   };
@@ -474,9 +515,13 @@ export default function Home() {
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseUp}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
             style={{
               width: displayWidth,
               height: displayHeight,
+              touchAction: "none",
             }}
             className={`absolute top-0 left-0 ${
               mode === "eraser" ? "cursor-cell" : "cursor-crosshair"
