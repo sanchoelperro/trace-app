@@ -16,7 +16,7 @@ export default function Home() {
   const [eraserWidth, setEraserWidth] = useState(10);
   const [mode, setMode] = useState<"pen" | "eraser">("pen");
   const [zoom, setZoom] = useState(1);
-  const [fitZoom, setFitZoom] = useState(1); // the "whole image visible" zoom level
+  const [fitZoom, setFitZoom] = useState(1);
   const [imgDimensions, setImgDimensions] = useState({ width: 0, height: 0 });
   const [orientation, setOrientation] = useState<"portrait" | "landscape">("portrait");
   const [fileName, setFileName] = useState("trace-drawing");
@@ -52,9 +52,6 @@ export default function Home() {
       setImageLoaded(true);
       setImgDimensions({ width: img.width, height: img.height });
 
-      // Calculate a zoom level so the whole image fits inside the visible
-      // container, using whichever dimension (width or height) is more
-      // restrictive. Capped at 1 so small images aren't blown up blurry.
       const containerWidth = container.clientWidth;
       const containerHeight = container.clientHeight;
       const widthRatio = containerWidth / img.width;
@@ -75,10 +72,10 @@ export default function Home() {
     img.src = imageUrl;
   };
 
-  // Shared coordinate extractor — works for both mouse and touch events.
-  const getPosFromEvent = (
-    e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>
-  ) => {
+  // Pointer Events unify mouse, touch, and stylus input into one API —
+  // e.clientX/clientY work the same way regardless of input type, so we
+  // no longer need separate math for touch vs. mouse.
+  const getPosFromEvent = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = drawCanvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
 
@@ -86,20 +83,9 @@ export default function Home() {
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
 
-    let clientX: number;
-    let clientY: number;
-
-    if ("touches" in e) {
-      clientX = e.touches[0].clientX;
-      clientY = e.touches[0].clientY;
-    } else {
-      clientX = e.clientX;
-      clientY = e.clientY;
-    }
-
     return {
-      x: (clientX - rect.left) * scaleX,
-      y: (clientY - rect.top) * scaleY,
+      x: (e.clientX - rect.left) * scaleX,
+      y: (e.clientY - rect.top) * scaleY,
     };
   };
 
@@ -115,12 +101,15 @@ export default function Home() {
     setCanRedo(false);
   };
 
-  const startDrawing = (
-    e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>
-  ) => {
+  const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = drawCanvasRef.current;
     const ctx = canvas?.getContext("2d");
-    if (!ctx) return;
+    if (!canvas || !ctx) return;
+
+    // Pointer capture: keeps this exact finger/mouse's events routed to
+    // this canvas even if it moves quickly or briefly leaves its bounds.
+    // This is the key fix for touch responsiveness on iOS Safari.
+    canvas.setPointerCapture(e.pointerId);
 
     saveSnapshot();
 
@@ -130,9 +119,7 @@ export default function Home() {
     isDrawing.current = true;
   };
 
-  const continueDrawing = (
-    e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>
-  ) => {
+  const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!isDrawing.current) return;
 
     const canvas = drawCanvasRef.current;
@@ -155,25 +142,12 @@ export default function Home() {
     ctx.stroke();
   };
 
-  const stopDrawing = () => {
+  const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = drawCanvasRef.current;
+    if (canvas && canvas.hasPointerCapture(e.pointerId)) {
+      canvas.releasePointerCapture(e.pointerId);
+    }
     isDrawing.current = false;
-  };
-
-  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => startDrawing(e);
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => continueDrawing(e);
-  const handleMouseUp = () => stopDrawing();
-
-  const handleTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    startDrawing(e);
-  };
-  const handleTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    continueDrawing(e);
-  };
-  const handleTouchEnd = (e: React.TouchEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    stopDrawing();
   };
 
   const handleUndo = () => {
@@ -215,9 +189,6 @@ export default function Home() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
   };
 
-  // Zoom bounds now scale relative to fitZoom, so very large photos (which
-  // might have a fitZoom of, say, 15%) can still zoom out/in sensibly,
-  // instead of being stuck against a fixed 50% floor.
   const minZoom = Math.min(0.1, fitZoom);
   const handleZoomIn = () => setZoom((z) => Math.min(z + 0.25, 3));
   const handleZoomOut = () => setZoom((z) => Math.max(z - 0.25, minZoom));
@@ -523,13 +494,10 @@ export default function Home() {
           />
           <canvas
             ref={drawCanvasRef}
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseUp}
-            onTouchStart={handleTouchStart}
-            onTouchMove={handleTouchMove}
-            onTouchEnd={handleTouchEnd}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
             style={{
               width: displayWidth,
               height: displayHeight,
