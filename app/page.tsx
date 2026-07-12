@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import jsPDF from "jspdf";
 
 // US Letter paper size in millimeters (8.5in x 11in)
@@ -22,10 +22,122 @@ export default function Home() {
   const [fileName, setFileName] = useState("trace-drawing");
   const isDrawing = useRef(false);
 
+  // Refs that mirror state values the drawing listener needs to read.
+  // The listener is attached once (see useEffect below) and keeps
+  // running across re-renders (e.g. when zoom changes), so it can't
+  // rely on regular state directly — it would only ever see the value
+  // from the moment it was first attached. Refs always hold the latest
+  // value, regardless of re-renders.
+  const modeRef = useRef(mode);
+  const lineWidthRef = useRef(lineWidth);
+  const eraserWidthRef = useRef(eraserWidth);
+
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
+
+  useEffect(() => {
+    lineWidthRef.current = lineWidth;
+  }, [lineWidth]);
+
+  useEffect(() => {
+    eraserWidthRef.current = eraserWidth;
+  }, [eraserWidth]);
+
   const undoStack = useRef<ImageData[]>([]);
   const redoStack = useRef<ImageData[]>([]);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
+
+  const saveSnapshot = () => {
+    const canvas = drawCanvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (!canvas || !ctx) return;
+
+    const snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    undoStack.current.push(snapshot);
+    redoStack.current = [];
+    setCanUndo(true);
+    setCanRedo(false);
+  };
+
+  // Attach native pointer event listeners ONCE when the canvas first
+  // exists, using addEventListener directly rather than React's JSX
+  // props. This keeps the listeners stable across every future
+  // re-render (including zoom changes), and lets us explicitly set
+  // { passive: false } so preventDefault() is guaranteed to work.
+  useEffect(() => {
+    const canvas = drawCanvasRef.current;
+    if (!canvas) return;
+
+    const getPos = (e: PointerEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      return {
+        x: (e.clientX - rect.left) * scaleX,
+        y: (e.clientY - rect.top) * scaleY,
+      };
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      e.preventDefault();
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+
+      canvas.setPointerCapture(e.pointerId);
+      saveSnapshot();
+
+      const { x, y } = getPos(e);
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      isDrawing.current = true;
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (!isDrawing.current) return;
+      e.preventDefault();
+
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+
+      const { x, y } = getPos(e);
+
+      if (modeRef.current === "eraser") {
+        ctx.globalCompositeOperation = "destination-out";
+        ctx.lineWidth = eraserWidthRef.current;
+      } else {
+        ctx.globalCompositeOperation = "source-over";
+        ctx.lineWidth = lineWidthRef.current;
+        ctx.strokeStyle = "black";
+      }
+
+      ctx.lineCap = "round";
+      ctx.lineTo(x, y);
+      ctx.stroke();
+    };
+
+    const onPointerUp = (e: PointerEvent) => {
+      if (canvas.hasPointerCapture(e.pointerId)) {
+        canvas.releasePointerCapture(e.pointerId);
+      }
+      isDrawing.current = false;
+    };
+
+    // passive: false is required so preventDefault() inside these
+    // listeners reliably blocks scrolling/gesture behavior on iOS Safari
+    canvas.addEventListener("pointerdown", onPointerDown, { passive: false });
+    canvas.addEventListener("pointermove", onPointerMove, { passive: false });
+    canvas.addEventListener("pointerup", onPointerUp, { passive: false });
+    canvas.addEventListener("pointercancel", onPointerUp, { passive: false });
+
+    return () => {
+      canvas.removeEventListener("pointerdown", onPointerDown);
+      canvas.removeEventListener("pointermove", onPointerMove);
+      canvas.removeEventListener("pointerup", onPointerUp);
+      canvas.removeEventListener("pointercancel", onPointerUp);
+    };
+  }, []); // empty array = attach once, never re-attach
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -70,84 +182,6 @@ export default function Home() {
     };
 
     img.src = imageUrl;
-  };
-
-  // Pointer Events unify mouse, touch, and stylus input into one API —
-  // e.clientX/clientY work the same way regardless of input type, so we
-  // no longer need separate math for touch vs. mouse.
-  const getPosFromEvent = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    const canvas = drawCanvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-
-    return {
-      x: (e.clientX - rect.left) * scaleX,
-      y: (e.clientY - rect.top) * scaleY,
-    };
-  };
-
-  const saveSnapshot = () => {
-    const canvas = drawCanvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) return;
-
-    const snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    undoStack.current.push(snapshot);
-    redoStack.current = [];
-    setCanUndo(true);
-    setCanRedo(false);
-  };
-
-  const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    const canvas = drawCanvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) return;
-
-    // Pointer capture: keeps this exact finger/mouse's events routed to
-    // this canvas even if it moves quickly or briefly leaves its bounds.
-    // This is the key fix for touch responsiveness on iOS Safari.
-    canvas.setPointerCapture(e.pointerId);
-
-    saveSnapshot();
-
-    const { x, y } = getPosFromEvent(e);
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    isDrawing.current = true;
-  };
-
-  const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!isDrawing.current) return;
-
-    const canvas = drawCanvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!ctx) return;
-
-    const { x, y } = getPosFromEvent(e);
-
-    if (mode === "eraser") {
-      ctx.globalCompositeOperation = "destination-out";
-      ctx.lineWidth = eraserWidth;
-    } else {
-      ctx.globalCompositeOperation = "source-over";
-      ctx.lineWidth = lineWidth;
-      ctx.strokeStyle = "black";
-    }
-
-    ctx.lineCap = "round";
-    ctx.lineTo(x, y);
-    ctx.stroke();
-  };
-
-  const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    const canvas = drawCanvasRef.current;
-    if (canvas && canvas.hasPointerCapture(e.pointerId)) {
-      canvas.releasePointerCapture(e.pointerId);
-    }
-    isDrawing.current = false;
   };
 
   const handleUndo = () => {
@@ -494,10 +528,6 @@ export default function Home() {
           />
           <canvas
             ref={drawCanvasRef}
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            onPointerCancel={handlePointerUp}
             style={{
               width: displayWidth,
               height: displayHeight,
