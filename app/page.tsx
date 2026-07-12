@@ -7,6 +7,7 @@ import jsPDF from "jspdf";
 const LETTER = { width: 215.9, height: 279.4 };
 
 export default function Home() {
+  const containerRef = useRef<HTMLDivElement>(null);
   const imageCanvasRef = useRef<HTMLCanvasElement>(null);
   const drawCanvasRef = useRef<HTMLCanvasElement>(null);
   const [imageLoaded, setImageLoaded] = useState(false);
@@ -15,6 +16,7 @@ export default function Home() {
   const [eraserWidth, setEraserWidth] = useState(10);
   const [mode, setMode] = useState<"pen" | "eraser">("pen");
   const [zoom, setZoom] = useState(1);
+  const [fitZoom, setFitZoom] = useState(1); // the "whole image visible" zoom level
   const [imgDimensions, setImgDimensions] = useState({ width: 0, height: 0 });
   const [orientation, setOrientation] = useState<"portrait" | "landscape">("portrait");
   const [fileName, setFileName] = useState("trace-drawing");
@@ -35,7 +37,8 @@ export default function Home() {
     img.onload = () => {
       const imageCanvas = imageCanvasRef.current;
       const drawCanvas = drawCanvasRef.current;
-      if (!imageCanvas || !drawCanvas) return;
+      const container = containerRef.current;
+      if (!imageCanvas || !drawCanvas || !container) return;
 
       imageCanvas.width = img.width;
       imageCanvas.height = img.height;
@@ -48,7 +51,18 @@ export default function Home() {
       ctx.drawImage(img, 0, 0, img.width, img.height);
       setImageLoaded(true);
       setImgDimensions({ width: img.width, height: img.height });
-      setZoom(1);
+
+      // Calculate a zoom level so the whole image fits inside the visible
+      // container, using whichever dimension (width or height) is more
+      // restrictive. Capped at 1 so small images aren't blown up blurry.
+      const containerWidth = container.clientWidth;
+      const containerHeight = container.clientHeight;
+      const widthRatio = containerWidth / img.width;
+      const heightRatio = containerHeight / img.height;
+      const calculatedFitZoom = Math.min(widthRatio, heightRatio, 1);
+
+      setFitZoom(calculatedFitZoom);
+      setZoom(calculatedFitZoom);
 
       setOrientation(img.width > img.height ? "landscape" : "portrait");
 
@@ -62,8 +76,6 @@ export default function Home() {
   };
 
   // Shared coordinate extractor — works for both mouse and touch events.
-  // clientX/clientY come directly from mouse events, but from
-  // e.touches[0] (the first finger) on touch events.
   const getPosFromEvent = (
     e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>
   ) => {
@@ -78,11 +90,9 @@ export default function Home() {
     let clientY: number;
 
     if ("touches" in e) {
-      // Touch event (iPhone/iPad)
       clientX = e.touches[0].clientX;
       clientY = e.touches[0].clientY;
     } else {
-      // Mouse event (desktop/laptop)
       clientX = e.clientX;
       clientY = e.clientY;
     }
@@ -149,13 +159,10 @@ export default function Home() {
     isDrawing.current = false;
   };
 
-  // Mouse handlers (desktop/laptop)
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => startDrawing(e);
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => continueDrawing(e);
   const handleMouseUp = () => stopDrawing();
 
-  // Touch handlers (iPhone/iPad) — each calls preventDefault() first so the
-  // page doesn't scroll while you're tracing with your finger
   const handleTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
     e.preventDefault();
     startDrawing(e);
@@ -208,9 +215,13 @@ export default function Home() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
   };
 
+  // Zoom bounds now scale relative to fitZoom, so very large photos (which
+  // might have a fitZoom of, say, 15%) can still zoom out/in sensibly,
+  // instead of being stuck against a fixed 50% floor.
+  const minZoom = Math.min(0.1, fitZoom);
   const handleZoomIn = () => setZoom((z) => Math.min(z + 0.25, 3));
-  const handleZoomOut = () => setZoom((z) => Math.max(z - 0.25, 0.5));
-  const handleZoomReset = () => setZoom(1);
+  const handleZoomOut = () => setZoom((z) => Math.max(z - 0.25, minZoom));
+  const handleZoomReset = () => setZoom(fitZoom);
 
   const displayWidth = imgDimensions.width * zoom;
   const displayHeight = imgDimensions.height * zoom;
@@ -397,7 +408,7 @@ export default function Home() {
                 >
                   Zoom Out
                 </button>
-                <span className="text-sm text-gray-700 w-12 text-center">
+                <span className="text-sm text-gray-700 w-14 text-center">
                   {Math.round(zoom * 100)}%
                 </span>
                 <button
@@ -410,7 +421,7 @@ export default function Home() {
                   onClick={handleZoomReset}
                   className="px-3 py-1.5 rounded-md text-sm border bg-white text-gray-700 border-gray-300"
                 >
-                  Reset
+                  Fit to Screen
                 </button>
               </div>
 
@@ -488,6 +499,7 @@ export default function Home() {
       )}
 
       <div
+        ref={containerRef}
         className="border border-gray-300 bg-gray-100 shadow-sm"
         style={{
           width: "100%",
