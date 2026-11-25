@@ -7,6 +7,7 @@ import { ExportControls } from "./components/ExportControls";
 import { ViewControls } from "./components/ViewControls";
 import { useDrawingEngine, type DrawMode } from "./hooks/useDrawingEngine";
 import { useUndoHistory } from "./hooks/useUndoHistory";
+import { capToLongSide } from "@/lib/canvasSize";
 import { exportDrawingPdf } from "@/lib/exportPdf";
 import { loadImageFromFile } from "@/lib/loadImage";
 import { computeFitZoom, computePrintLayout, type Orientation, type Size } from "@/lib/printLayout";
@@ -28,6 +29,7 @@ export default function Home() {
   const [opacity, setOpacity] = useState(0.4);
   const [lineWidth, setLineWidth] = useState(2);
   const [eraserWidth, setEraserWidth] = useState(10);
+  const [smoothing, setSmoothing] = useState(0);
   const [mode, setMode] = useState<DrawMode>("pen");
   const [zoom, setZoom] = useState(1);
   const [fitZoom, setFitZoom] = useState(1);
@@ -36,7 +38,7 @@ export default function Home() {
   const [fileName, setFileName] = useState("trace-drawing");
 
   const history = useUndoHistory(drawCanvasRef);
-  useDrawingEngine(drawCanvasRef, { mode, lineWidth, eraserWidth }, history.saveSnapshot);
+  useDrawingEngine(drawCanvasRef, { mode, lineWidth, eraserWidth, smoothing }, history.recordChange);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -48,18 +50,21 @@ export default function Home() {
     const container = containerRef.current;
     if (!imageCanvas || !drawCanvas || !container) return;
 
-    // Both canvases use the photo's pixel size. Setting width/height also
-    // clears a canvas, which wipes any previous drawing.
-    imageCanvas.width = img.width;
-    imageCanvas.height = img.height;
-    drawCanvas.width = img.width;
-    drawCanvas.height = img.height;
+    // Both canvases share one pixel size: the photo's, scaled down if its
+    // long side exceeds the cap (see lib/canvasSize.ts for why). Setting
+    // width/height also clears a canvas, which wipes any previous drawing.
+    const size = capToLongSide({ width: img.width, height: img.height });
+    imageCanvas.width = size.width;
+    imageCanvas.height = size.height;
+    drawCanvas.width = size.width;
+    drawCanvas.height = size.height;
 
     const ctx = imageCanvas.getContext("2d");
     if (!ctx) return;
-    ctx.drawImage(img, 0, 0, img.width, img.height);
+    ctx.imageSmoothingQuality = "high"; // better downscaling of large photos
+    ctx.drawImage(img, 0, 0, size.width, size.height);
+    URL.revokeObjectURL(img.src); // pixels are on the canvas; free the decoded file
 
-    const size: Size = { width: img.width, height: img.height };
     setImageLoaded(true);
     setImgDimensions(size);
 
@@ -70,17 +75,8 @@ export default function Home() {
     setFitZoom(fit);
     setZoom(fit);
 
-    setOrientation(img.width > img.height ? "landscape" : "portrait");
+    setOrientation(size.width > size.height ? "landscape" : "portrait");
     history.reset();
-  };
-
-  const handleClearDrawing = () => {
-    const canvas = drawCanvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) return;
-
-    history.saveSnapshot();
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
   };
 
   // Allow zooming out far enough to see the whole image even if it is huge.
@@ -122,13 +118,16 @@ export default function Home() {
             onLineWidthChange={setLineWidth}
             eraserWidth={eraserWidth}
             onEraserWidthChange={setEraserWidth}
+            smoothing={smoothing}
+            onSmoothingChange={setSmoothing}
             mode={mode}
             onModeChange={setMode}
             canUndo={history.canUndo}
             canRedo={history.canRedo}
+            canClear={history.hasMarks}
             onUndo={history.undo}
             onRedo={history.redo}
-            onClear={handleClearDrawing}
+            onClear={history.clearWithUndo}
           />
 
           <hr className="border-gray-200" />
@@ -147,7 +146,7 @@ export default function Home() {
           <ExportControls
             fileName={fileName}
             onFileNameChange={setFileName}
-            canExport={history.canUndo}
+            canExport={history.hasMarks}
             onExport={handleExportPdf}
             layout={layout}
             orientation={orientation}

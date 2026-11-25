@@ -1,3 +1,4 @@
+import { MAX_SMOOTHING } from "@/lib/strokeSmoothing";
 import type { DrawMode } from "../hooks/useDrawingEngine";
 import { BUTTON_PLAIN, DISABLED, SliderControl, ToggleButton, ToolbarGroup } from "./ui";
 
@@ -8,16 +9,20 @@ export interface DrawingToolsProps {
   onLineWidthChange: (value: number) => void;
   eraserWidth: number;
   onEraserWidthChange: (value: number) => void;
+  smoothing: number;
+  onSmoothingChange: (value: number) => void;
   mode: DrawMode;
   onModeChange: (mode: DrawMode) => void;
   canUndo: boolean;
   canRedo: boolean;
+  /** Clear is enabled whenever the drawing has marks (not tied to undo). */
+  canClear: boolean;
   onUndo: () => void;
   onRedo: () => void;
   onClear: () => void;
 }
 
-/** "Drawing" toolbar group: reference opacity, tool sizes, tool choice, history. */
+/** "Drawing" toolbar group: reference opacity, tool sizes, smoothing, tool choice, history. */
 export function DrawingTools(props: DrawingToolsProps) {
   return (
     <ToolbarGroup title="Drawing">
@@ -50,6 +55,16 @@ export function DrawingTools(props: DrawingToolsProps) {
           onChange={props.onEraserWidthChange}
         />
 
+        <SliderControl
+          id="smoothing"
+          label={`Stroke smoothing: ${props.smoothing === 0 ? "off" : props.smoothing}`}
+          min={0}
+          max={MAX_SMOOTHING}
+          step={1}
+          value={props.smoothing}
+          onChange={props.onSmoothingChange}
+        />
+
         <div className="flex items-center gap-2">
           <ToggleButton active={props.mode === "pen"} onClick={() => props.onModeChange("pen")}>
             Pen
@@ -71,7 +86,7 @@ export function DrawingTools(props: DrawingToolsProps) {
           </button>
           <button
             onClick={props.onClear}
-            disabled={!props.canUndo}
+            disabled={!props.canClear}
             className={`px-3 py-1.5 rounded-md text-sm border bg-white text-red-600 border-red-300 ${DISABLED}`}
           >
             Clear Drawing

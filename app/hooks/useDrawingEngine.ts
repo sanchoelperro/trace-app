@@ -1,4 +1,7 @@
 import { useEffect, useRef, type RefObject } from "react";
+import type { Point, Rect } from "@/lib/geometry";
+import { StrokeRenderer } from "@/lib/strokeRenderer";
+import { Stabilizer } from "@/lib/strokeSmoothing";
 
 export type DrawMode = "pen" | "eraser";
 
@@ -6,12 +9,8 @@ export interface DrawingSettings {
   mode: DrawMode;
   lineWidth: number;
   eraserWidth: number;
-}
-
-/** A point in canvas pixel coordinates (not CSS pixels). */
-interface CanvasPoint {
-  x: number;
-  y: number;
+  /** Stroke smoothing strength, 0 (off) .. MAX_SMOOTHING. */
+  smoothing: number;
 }
 
 /**
@@ -30,32 +29,47 @@ function useLatestRef<T>(value: T): RefObject<T> {
 }
 
 /**
- * Convert a pointer event's screen position to canvas pixel coordinates.
+ * Convert screen coordinates to canvas pixel coordinates.
  * The canvas is displayed scaled by CSS (zoom/fit), so its on-screen size
  * differs from its pixel size; this ratio undoes that scaling.
  */
-function toCanvasPoint(canvas: HTMLCanvasElement, e: PointerEvent): CanvasPoint {
-  const rect = canvas.getBoundingClientRect();
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
+function toCanvasPoint(
+  canvas: HTMLCanvasElement,
+  rect: DOMRect,
+  clientX: number,
+  clientY: number
+): Point {
   return {
-    x: (e.clientX - rect.left) * scaleX,
-    y: (e.clientY - rect.top) * scaleY,
+    x: (clientX - rect.left) * (canvas.width / rect.width),
+    y: (clientY - rect.top) * (canvas.height / rect.height),
   };
 }
 
-/** Set pen or eraser styling on the context for the current mode. */
-function applyToolStyle(ctx: CanvasRenderingContext2D, settings: DrawingSettings): void {
-  if (settings.mode === "eraser") {
-    // destination-out removes existing pixels instead of painting new ones.
-    ctx.globalCompositeOperation = "destination-out";
-    ctx.lineWidth = settings.eraserWidth;
-  } else {
-    ctx.globalCompositeOperation = "source-over";
-    ctx.lineWidth = settings.lineWidth;
-    ctx.strokeStyle = "black";
+/**
+ * All input positions carried by one pointermove event.
+ *
+ * Browsers deliver at most one pointermove per frame but may sample the
+ * finger/pen more often; getCoalescedEvents() returns those extra samples,
+ * giving smoother curves on fast strokes. It is missing in older Safari
+ * (added in iOS 18.2), so we feature-detect and fall back to the event itself.
+ * Early implementations lacked pointerId/target on coalesced events, so we
+ * only read clientX/clientY from them.
+ */
+function coalescedPositions(e: PointerEvent): { clientX: number; clientY: number }[] {
+  if (typeof e.getCoalescedEvents === "function") {
+    const events = e.getCoalescedEvents();
+    if (events.length > 0) return events;
   }
-  ctx.lineCap = "round";
+  return [e];
+}
+
+/** State of the stroke currently being drawn (null when idle). */
+interface ActiveStroke {
+  pointerId: number;
+  renderer: StrokeRenderer;
+  stabilizer: Stabilizer;
+  /** Raw points received since the last animation frame. */
+  pending: Point[];
 }
 
 /**
@@ -68,64 +82,109 @@ function applyToolStyle(ctx: CanvasRenderingContext2D, settings: DrawingSettings
  * { passive: false } so preventDefault() reliably blocks scrolling/gestures.
  * Everything the listeners read that can change goes through refs.
  *
- * @param onStrokeStart called right before a stroke begins (used to save an
- *        undo snapshot).
+ * PERFORMANCE: pointer events only queue points; actual drawing happens at
+ * most once per screen refresh in a requestAnimationFrame callback, and only
+ * the new part of the stroke is drawn (see StrokeRenderer).
+ *
+ * @param onStrokeCommit called after a stroke finishes with the area it
+ *        changed (used to record an undo step). Not called for a plain tap.
  */
 export function useDrawingEngine(
   canvasRef: RefObject<HTMLCanvasElement | null>,
   settings: DrawingSettings,
-  onStrokeStart: () => void
+  onStrokeCommit: (changed: Rect) => void
 ): void {
-  const modeRef = useLatestRef(settings.mode);
-  const lineWidthRef = useLatestRef(settings.lineWidth);
-  const eraserWidthRef = useLatestRef(settings.eraserWidth);
-  const onStrokeStartRef = useLatestRef(onStrokeStart);
+  const settingsRef = useLatestRef(settings);
+  const onStrokeCommitRef = useLatestRef(onStrokeCommit);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    const ctx = canvas?.getContext("2d");
+    if (!canvas || !ctx) return;
 
-    let isDrawing = false;
+    let stroke: ActiveStroke | null = null;
+    let frameId: number | null = null;
 
-    const currentSettings = (): DrawingSettings => ({
-      mode: modeRef.current,
-      lineWidth: lineWidthRef.current,
-      eraserWidth: eraserWidthRef.current,
-    });
+    /** Smooth and draw every queued point. Safe to call at any time. */
+    const flushPending = () => {
+      if (!stroke || stroke.pending.length === 0) return;
+      const s = stroke;
+      const smoothed = s.pending.map((p) => s.stabilizer.next(p));
+      s.pending = [];
+      s.renderer.addPoints(smoothed);
+    };
+
+    const onFrame = () => {
+      frameId = null;
+      flushPending();
+    };
+
+    const scheduleFrame = () => {
+      if (frameId === null) frameId = requestAnimationFrame(onFrame);
+    };
+
+    const cancelFrame = () => {
+      if (frameId !== null) cancelAnimationFrame(frameId);
+      frameId = null;
+    };
 
     const onPointerDown = (e: PointerEvent) => {
       e.preventDefault();
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
+      // Ignore extra pointers while a stroke is in progress (e.g. a second
+      // finger). Multi-touch gestures are handled in a later phase.
+      if (stroke) return;
 
       // Keep receiving move/up events even if the pointer leaves the canvas.
       canvas.setPointerCapture(e.pointerId);
-      onStrokeStartRef.current();
 
-      const { x, y } = toCanvasPoint(canvas, e);
-      ctx.beginPath();
-      ctx.moveTo(x, y);
-      isDrawing = true;
+      // Settings are read once per stroke, so a stroke is consistent even if
+      // a slider changes mid-stroke.
+      const current = settingsRef.current;
+      const start = toCanvasPoint(canvas, canvas.getBoundingClientRect(), e.clientX, e.clientY);
+      const erase = current.mode === "eraser";
+
+      stroke = {
+        pointerId: e.pointerId,
+        renderer: new StrokeRenderer(
+          ctx,
+          { erase, width: erase ? current.eraserWidth : current.lineWidth },
+          start
+        ),
+        stabilizer: new Stabilizer(current.smoothing, start),
+        pending: [],
+      };
     };
 
     const onPointerMove = (e: PointerEvent) => {
-      if (!isDrawing) return;
+      if (!stroke || e.pointerId !== stroke.pointerId) return;
       e.preventDefault();
 
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-
-      const { x, y } = toCanvasPoint(canvas, e);
-      applyToolStyle(ctx, currentSettings());
-      ctx.lineTo(x, y);
-      ctx.stroke();
+      // One layout read per event (not per coalesced sample). Reading it
+      // fresh keeps positions correct if the page scrolled during a stroke.
+      const rect = canvas.getBoundingClientRect();
+      for (const sample of coalescedPositions(e)) {
+        stroke.pending.push(toCanvasPoint(canvas, rect, sample.clientX, sample.clientY));
+      }
+      scheduleFrame();
     };
 
     const onPointerUp = (e: PointerEvent) => {
+      if (!stroke || e.pointerId !== stroke.pointerId) return;
+
       if (canvas.hasPointerCapture(e.pointerId)) {
         canvas.releasePointerCapture(e.pointerId);
       }
-      isDrawing = false;
+
+      // Draw everything still queued right now instead of waiting a frame,
+      // then end the line exactly where the pointer lifted.
+      cancelFrame();
+      flushPending();
+      const end = toCanvasPoint(canvas, canvas.getBoundingClientRect(), e.clientX, e.clientY);
+      stroke.renderer.finish(end);
+
+      const changed = stroke.renderer.drewSomething ? stroke.renderer.dirtyRect() : null;
+      stroke = null;
+      if (changed) onStrokeCommitRef.current(changed);
     };
 
     // passive: false is required so preventDefault() inside these
@@ -136,11 +195,12 @@ export function useDrawingEngine(
     canvas.addEventListener("pointercancel", onPointerUp, { passive: false });
 
     return () => {
+      cancelFrame();
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMove);
       canvas.removeEventListener("pointerup", onPointerUp);
       canvas.removeEventListener("pointercancel", onPointerUp);
     };
     // All dependencies are refs (stable identities), so this runs once.
-  }, [canvasRef, modeRef, lineWidthRef, eraserWidthRef, onStrokeStartRef]);
+  }, [canvasRef, settingsRef, onStrokeCommitRef]);
 }
