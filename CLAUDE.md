@@ -6,7 +6,7 @@ Personal, fully client-side web app: upload a reference photo, trace it on a
 transparent layer (mouse, finger or pen), export only the lines as a PDF on
 US Letter. No backend; the photo never leaves the browser.
 
-Stack: Next.js 16 (App Router, Turbopack), React 19, TypeScript, Tailwind v4,
+Stack: Next.js 16 (App Router, built with **webpack**, see below), React 19, TypeScript, Tailwind v4,
 jsPDF. Deployed on Vercel. `@/*` resolves to the repo root (there is no `src/`).
 Note: `TRACE_APP_PROJECT_CONTEXT.md` is the original v1 brief and is partly
 stale (it says A4/A3 and mouse-only; the app now uses Letter and supports touch).
@@ -18,6 +18,10 @@ stale (it says A4/A3 and mouse-only; the app now uses Letter and supports touch)
   events, rAF batching. Delegates drawing to `lib/strokeRenderer.ts`.
 - `app/hooks/useUndoHistory.ts` — region-based undo/redo (backup canvas + patches).
 - `app/hooks/useZoom.ts` — zoom state, buttons, anchored zoom (scroll fix-up in useLayoutEffect).
+- `app/hooks/useAutoTrace.ts` — Auto-Trace panel state, debounced preview, Apply.
+- `app/components/AutoTracePanel.tsx` — Auto-Trace toolbar group (sliders, Apply/Cancel).
+- `lib/autoTrace.ts` — pure Canny pipeline (gray, blur, Sobel, NMS, hysteresis, specks, thickness).
+- `lib/autoTrace.worker.ts` + `lib/autoTraceClient.ts` — Web Worker and its promise wrapper.
 - `lib/twoFingerGesture.ts` — pure pan/pinch math (anchor point + zoom from finger distance).
 - `app/components/CanvasStack.tsx` — scroll container + stacked canvases.
 - `app/components/{DrawingTools,ViewControls,ExportControls}.tsx` — labeled
@@ -72,6 +76,19 @@ stale (it says A4/A3 and mouse-only; the app now uses Letter and supports touch)
   a 6% dead zone so pure pans don't zoom) and scroll so that point stays
   under the current midpoint. Current zoom is read from the DOM
   (rect.width / canvas.width) so the engine needs no zoom ref.
+- **Build uses webpack** (`next dev --webpack`, `next build --webpack`).
+  Turbopack in Next 16.2.10 emits `new Worker(new URL("./x.ts", import.meta.url))`
+  as a raw .ts asset instead of compiling it (known 16.2.x regression, reportedly
+  fixed in 16.3). Webpack compiles it. After upgrading Next, try removing
+  `--webpack` and check that `.next/static/media` has no `autoTrace.worker*.ts`.
+- Auto-Trace: preview on a ~1000 px copy drawn (tinted blue) on a third
+  canvas with pointer-events none; it never touches the drawing canvas.
+  Apply traces the full-res reference canvas, draws via a temp canvas +
+  drawImage (source-over keeps existing marks; putImageData would replace
+  them), then `recordChange(bounds)` = ONE undo step. Worker returns lines
+  cropped to their bounding box. Slider units are defined at a 1000 px
+  reference; blur/speck length and gradient gain scale by longSide/1000 so
+  full-res results match the preview. Thickness is in drawing-canvas px.
 - Pen/eraser widths are in canvas pixels, so they look slightly thicker on
   photos that got capped (relative to the image) than before the cap.
 - Undo stacks live in refs (large, must not re-render); only `canUndo` /

@@ -1,10 +1,12 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { AutoTracePanel } from "./components/AutoTracePanel";
 import { CanvasStack } from "./components/CanvasStack";
 import { DrawingTools } from "./components/DrawingTools";
 import { ExportControls } from "./components/ExportControls";
 import { ViewControls } from "./components/ViewControls";
+import { useAutoTrace } from "./hooks/useAutoTrace";
 import { useDrawingEngine, type DrawMode } from "./hooks/useDrawingEngine";
 import { useUndoHistory } from "./hooks/useUndoHistory";
 import { useZoom } from "./hooks/useZoom";
@@ -22,6 +24,7 @@ export default function Home() {
   const containerRef = useRef<HTMLDivElement>(null);
   const imageCanvasRef = useRef<HTMLCanvasElement>(null);
   const drawCanvasRef = useRef<HTMLCanvasElement>(null);
+  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
 
   const [imageLoaded, setImageLoaded] = useState(false);
   const [opacity, setOpacity] = useState(0.4);
@@ -35,6 +38,12 @@ export default function Home() {
 
   const history = useUndoHistory(drawCanvasRef);
   const zoom = useZoom(containerRef);
+  const autoTrace = useAutoTrace({
+    imageCanvasRef,
+    drawCanvasRef,
+    previewCanvasRef,
+    onApplied: history.recordChange,
+  });
   useDrawingEngine(
     drawCanvasRef,
     { mode, lineWidth, eraserWidth, smoothing },
@@ -50,6 +59,7 @@ export default function Home() {
     if (!file) return;
 
     const img = await loadImageFromFile(file);
+    autoTrace.cancel(); // a preview of the old photo would be meaningless
     const imageCanvas = imageCanvasRef.current;
     const drawCanvas = drawCanvasRef.current;
     const container = containerRef.current;
@@ -130,6 +140,10 @@ export default function Home() {
 
           <hr className="border-gray-200" />
 
+          <AutoTracePanel controls={autoTrace} />
+
+          <hr className="border-gray-200" />
+
           <ViewControls
             zoom={zoom.zoom}
             onZoomIn={zoom.zoomIn}
@@ -160,6 +174,8 @@ export default function Home() {
         containerRef={containerRef}
         imageCanvasRef={imageCanvasRef}
         drawCanvasRef={drawCanvasRef}
+        previewCanvasRef={previewCanvasRef}
+        showPreview={autoTrace.isOpen}
         displayWidth={imgDimensions.width * zoom.zoom}
         displayHeight={imgDimensions.height * zoom.zoom}
         opacity={opacity}

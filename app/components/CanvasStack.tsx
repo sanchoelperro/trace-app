@@ -5,6 +5,9 @@ export interface CanvasStackProps {
   containerRef: RefObject<HTMLDivElement | null>;
   imageCanvasRef: RefObject<HTMLCanvasElement | null>;
   drawCanvasRef: RefObject<HTMLCanvasElement | null>;
+  previewCanvasRef: RefObject<HTMLCanvasElement | null>;
+  /** Show the Auto-Trace preview layer. */
+  showPreview: boolean;
   /** On-screen size in CSS pixels (image pixel size x zoom). */
   displayWidth: number;
   displayHeight: number;
@@ -16,6 +19,8 @@ export interface CanvasStackProps {
  * Scrollable viewport holding two canvases stacked exactly on top of each other:
  *  1. the reference photo (faded by `opacity`)
  *  2. the transparent drawing layer (receives pointer input, exported to PDF)
+ *  3. the Auto-Trace preview (lower resolution, stretched to the same size;
+ *     pointer-events none so input passes through to the drawing layer)
  *
  * Both canvases keep the photo's full pixel size internally; zoom only
  * changes their CSS width/height, so drawing coordinates stay stable.
@@ -24,6 +29,8 @@ export function CanvasStack({
   containerRef,
   imageCanvasRef,
   drawCanvasRef,
+  previewCanvasRef,
+  showPreview,
   displayWidth,
   displayHeight,
   opacity,
@@ -57,6 +64,16 @@ export function CanvasStack({
           className={`absolute top-0 left-0 ${
             mode === "eraser" ? "cursor-cell" : "cursor-crosshair"
           }`}
+        />
+        <canvas
+          ref={previewCanvasRef}
+          style={{
+            width: displayWidth,
+            height: displayHeight,
+            pointerEvents: "none",
+            display: showPreview ? "block" : "none",
+          }}
+          className="absolute top-0 left-0"
         />
       </div>
     </div>
