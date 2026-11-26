@@ -8,8 +8,8 @@ US Letter. No backend; the photo never leaves the browser.
 
 Stack: Next.js 16 (App Router, built with **webpack**, see below), React 19, TypeScript, Tailwind v4,
 jsPDF. Deployed on Vercel. `@/*` resolves to the repo root (there is no `src/`).
-Note: `TRACE_APP_PROJECT_CONTEXT.md` is the original v1 brief and is partly
-stale (it says A4/A3 and mouse-only; the app now uses Letter and supports touch).
+`TRACE_APP_PROJECT_CONTEXT.md` is the plain-language product brief (features,
+workflow, decisions, status); keep it in sync when features change.
 
 ## Layout
 
