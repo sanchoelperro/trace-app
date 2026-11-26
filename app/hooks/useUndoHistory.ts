@@ -27,6 +27,14 @@ export interface UndoHistory {
    * even when the canvas has lines.
    */
   hasMarks: boolean;
+  /**
+   * Increases on every change to the drawing (stroke, clear, undo, redo,
+   * reset). Comparing it with the value at save time tells whether the
+   * drawing has unsaved changes.
+   */
+  revision: number;
+  /** Same as `revision`, but current immediately (not after a re-render). */
+  getRevision: () => number;
   /** Call AFTER drawing into `changed`, to make that change undoable. */
   recordChange: (changed: Rect) => void;
   /**
@@ -38,8 +46,12 @@ export interface UndoHistory {
   clearWithUndo: () => void;
   undo: () => void;
   redo: () => void;
-  /** Forget all history; call after the drawing canvas was resized/reset. */
-  reset: () => void;
+  /**
+   * Forget all history; call after the drawing canvas was resized/reset or
+   * filled with a reopened drawing.
+   * @param hasMarks whether the canvas currently contains lines.
+   */
+  reset: (hasMarks?: boolean) => void;
 }
 
 /** Draw `data` into `ctx` at `rect`, or clear `rect` if `data` is null. */
@@ -75,16 +87,27 @@ export function useUndoHistory(canvasRef: RefObject<HTMLCanvasElement | null>): 
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const [hasMarks, setHasMarksState] = useState(false);
+  const revisionRef = useRef(0);
+  const [revision, setRevision] = useState(0);
+
+  const bumpRevision = useCallback(() => {
+    revisionRef.current += 1;
+    setRevision(revisionRef.current);
+  }, []);
+
+  const getRevision = useCallback(() => revisionRef.current, []);
 
   const setHasMarks = useCallback((value: boolean) => {
     hasMarksRef.current = value;
     setHasMarksState(value);
   }, []);
 
+  /** Refresh button state after any change; every change is a new revision. */
   const syncButtons = useCallback(() => {
     setCanUndo(undoStack.current.length > 0);
     setCanRedo(redoStack.current.length > 0);
-  }, []);
+    bumpRevision();
+  }, [bumpRevision]);
 
   /** Live canvas context plus a backup context of the same size. */
   const getContexts = useCallback(() => {
@@ -185,7 +208,7 @@ export function useUndoHistory(canvasRef: RefObject<HTMLCanvasElement | null>): 
     syncButtons();
   }, [getContexts, setHasMarks, syncButtons]);
 
-  const reset = useCallback(() => {
+  const reset = useCallback((marks = false) => {
     undoStack.current = [];
     redoStack.current = [];
     // Recreate the backup NOW, while it can copy the current (fresh) canvas.
@@ -193,9 +216,9 @@ export function useUndoHistory(canvasRef: RefObject<HTMLCanvasElement | null>): 
     // stroke as the "before" state, making it impossible to undo.
     backupRef.current = null;
     getContexts();
-    setHasMarks(false);
+    setHasMarks(marks);
     syncButtons();
   }, [getContexts, setHasMarks, syncButtons]);
 
-  return { canUndo, canRedo, hasMarks, recordChange, discardUncommitted, clearWithUndo, undo, redo, reset };
+  return { canUndo, canRedo, hasMarks, revision, getRevision, recordChange, discardUncommitted, clearWithUndo, undo, redo, reset };
 }

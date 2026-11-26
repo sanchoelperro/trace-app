@@ -1,12 +1,18 @@
 /**
- * Decode an image file chosen by the user into an HTMLImageElement.
- * Everything stays in the browser: the object URL points at local memory.
+ * Decode an image (a file the user picked, or a stored Blob) into an
+ * HTMLImageElement. Everything stays in the browser: the object URL points
+ * at local memory. The caller should URL.revokeObjectURL(img.src) once the
+ * pixels have been drawn somewhere, to free that memory.
  */
-export function loadImageFromFile(file: File): Promise<HTMLImageElement> {
+export function loadImageFromBlob(blob: Blob): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
+    const url = URL.createObjectURL(blob);
     img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error(`Could not load image "${file.name}"`));
-    img.src = URL.createObjectURL(file);
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Could not read the image"));
+    };
+    img.src = url;
   });
 }

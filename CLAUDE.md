@@ -22,6 +22,12 @@ stale (it says A4/A3 and mouse-only; the app now uses Letter and supports touch)
 - `app/components/AutoTracePanel.tsx` — Auto-Trace toolbar group (sliders, Apply/Cancel).
 - `lib/autoTrace.ts` — pure Canny pipeline (gray, blur, Sobel, NMS, hysteresis, specks, thickness).
 - `lib/autoTrace.worker.ts` + `lib/autoTraceClient.ts` — Web Worker and its promise wrapper.
+- `app/hooks/useProjects.ts` — save / save as / open / rename / delete / export / import,
+  unsaved-changes tracking, beforeunload warning, optional autosave.
+- `app/components/ProjectControls.tsx`, `ProjectsDialog.tsx` — Projects toolbar group and list modal.
+- `lib/projectStore.ts` — IndexedDB wrapper (no library). `lib/projectFile.ts` — export/import file.
+- `lib/projectTypes.ts` — Project/ProjectSettings types, `settingsKey`, `mergeSettings`.
+- `lib/canvasBlobs.ts` — canvas -> Blob, thumbnail, `canvasHasMarks`.
 - `lib/twoFingerGesture.ts` — pure pan/pinch math (anchor point + zoom from finger distance).
 - `app/components/CanvasStack.tsx` — scroll container + stacked canvases.
 - `app/components/{DrawingTools,ViewControls,ExportControls}.tsx` — labeled
@@ -89,6 +95,20 @@ stale (it says A4/A3 and mouse-only; the app now uses Letter and supports touch)
   cropped to their bounding box. Slider units are defined at a 1000 px
   reference; blur/speck length and gradient gain scale by longSide/1000 so
   full-res results match the preview. Thickness is in drawing-canvas px.
+- Projects: IndexedDB db `trace-paint` v1, stores `projects` (meta +
+  thumbnail, for the list) and `projectData` (photo + drawing blobs), both
+  keyed by id, written in one transaction. The ORIGINAL photo file is stored
+  and re-capped on open. Undo history is not stored. IndexedDB is NOT durable
+  (Safari evicts after 7 days unvisited unless installed to Home Screen), so
+  Export/Import exists: JSON `{format:"trace-paint-project", version:1, ...}`
+  with data-URL images, extension `.trace.json`, no zip library (owner's
+  decision). Import always gets a new id. Quota errors -> StorageFullError.
+- Unsaved changes: `useUndoHistory.revision` bumps on every drawing change;
+  dirty = revision or `settingsKey(settings)` differs from the save/open
+  marker (zoom excluded). When opening, paint the drawing BEFORE
+  `history.reset(hasMarks)` so the undo backup starts from it.
+- iOS Safari largely ignores `beforeunload`, so the leave warning mostly
+  helps on desktop; autosave/export are the iPad safety nets.
 - Pen/eraser widths are in canvas pixels, so they look slightly thicker on
   photos that got capped (relative to the image) than before the cap.
 - Undo stacks live in refs (large, must not re-render); only `canUndo` /
