@@ -7,13 +7,11 @@ import { ExportControls } from "./components/ExportControls";
 import { ViewControls } from "./components/ViewControls";
 import { useDrawingEngine, type DrawMode } from "./hooks/useDrawingEngine";
 import { useUndoHistory } from "./hooks/useUndoHistory";
+import { useZoom } from "./hooks/useZoom";
 import { capToLongSide } from "@/lib/canvasSize";
 import { exportDrawingPdf } from "@/lib/exportPdf";
 import { loadImageFromFile } from "@/lib/loadImage";
 import { computeFitZoom, computePrintLayout, type Orientation, type Size } from "@/lib/printLayout";
-
-const MAX_ZOOM = 3;
-const ZOOM_STEP = 0.25;
 
 /**
  * The page owns the shared UI state and wires the pieces together:
@@ -31,14 +29,21 @@ export default function Home() {
   const [eraserWidth, setEraserWidth] = useState(10);
   const [smoothing, setSmoothing] = useState(0);
   const [mode, setMode] = useState<DrawMode>("pen");
-  const [zoom, setZoom] = useState(1);
-  const [fitZoom, setFitZoom] = useState(1);
   const [imgDimensions, setImgDimensions] = useState<Size>({ width: 0, height: 0 });
   const [orientation, setOrientation] = useState<Orientation>("portrait");
   const [fileName, setFileName] = useState("trace-drawing");
 
   const history = useUndoHistory(drawCanvasRef);
-  useDrawingEngine(drawCanvasRef, { mode, lineWidth, eraserWidth, smoothing }, history.recordChange);
+  const zoom = useZoom(containerRef);
+  useDrawingEngine(
+    drawCanvasRef,
+    { mode, lineWidth, eraserWidth, smoothing },
+    {
+      onStrokeCommit: history.recordChange,
+      onStrokeCancel: history.discardUncommitted,
+      onGestureZoom: zoom.zoomTo,
+    }
+  );
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -72,18 +77,11 @@ export default function Home() {
       width: container.clientWidth,
       height: container.clientHeight,
     });
-    setFitZoom(fit);
-    setZoom(fit);
+    zoom.setFitZoom(fit);
 
     setOrientation(size.width > size.height ? "landscape" : "portrait");
     history.reset();
   };
-
-  // Allow zooming out far enough to see the whole image even if it is huge.
-  const minZoom = Math.min(0.1, fitZoom);
-  const handleZoomIn = () => setZoom((z) => Math.min(z + ZOOM_STEP, MAX_ZOOM));
-  const handleZoomOut = () => setZoom((z) => Math.max(z - ZOOM_STEP, minZoom));
-  const handleZoomReset = () => setZoom(fitZoom);
 
   const layout = computePrintLayout(imgDimensions, orientation);
 
@@ -133,10 +131,10 @@ export default function Home() {
           <hr className="border-gray-200" />
 
           <ViewControls
-            zoom={zoom}
-            onZoomIn={handleZoomIn}
-            onZoomOut={handleZoomOut}
-            onFit={handleZoomReset}
+            zoom={zoom.zoom}
+            onZoomIn={zoom.zoomIn}
+            onZoomOut={zoom.zoomOut}
+            onFit={zoom.zoomToFit}
             orientation={orientation}
             onOrientationChange={setOrientation}
           />
@@ -162,8 +160,8 @@ export default function Home() {
         containerRef={containerRef}
         imageCanvasRef={imageCanvasRef}
         drawCanvasRef={drawCanvasRef}
-        displayWidth={imgDimensions.width * zoom}
-        displayHeight={imgDimensions.height * zoom}
+        displayWidth={imgDimensions.width * zoom.zoom}
+        displayHeight={imgDimensions.height * zoom.zoom}
         opacity={opacity}
         mode={mode}
       />

@@ -29,6 +29,11 @@ export interface UndoHistory {
   hasMarks: boolean;
   /** Call AFTER drawing into `changed`, to make that change undoable. */
   recordChange: (changed: Rect) => void;
+  /**
+   * Undo an UNRECORDED change in `rect` (e.g. a stroke cancelled by a second
+   * finger) by copying the backup back. Leaves the history untouched.
+   */
+  discardUncommitted: (rect: Rect) => void;
   /** Erase the whole drawing as one undoable step. */
   clearWithUndo: () => void;
   undo: () => void;
@@ -130,6 +135,19 @@ export function useUndoHistory(canvasRef: RefObject<HTMLCanvasElement | null>): 
     [getContexts, pushEntry]
   );
 
+  const discardUncommitted = useCallback(
+    (rect: Rect) => {
+      const ctxs = getContexts();
+      if (!ctxs) return;
+      // The backup still holds the state from before the stroke started.
+      // putImageData replaces pixels exactly (ignores blending), which is
+      // what we want for both drawn and erased areas.
+      const before = ctxs.backup.getImageData(rect.x, rect.y, rect.width, rect.height);
+      ctxs.live.putImageData(before, rect.x, rect.y);
+    },
+    [getContexts]
+  );
+
   const clearWithUndo = useCallback(() => {
     const ctxs = getContexts();
     if (!ctxs) return;
@@ -179,5 +197,5 @@ export function useUndoHistory(canvasRef: RefObject<HTMLCanvasElement | null>): 
     syncButtons();
   }, [getContexts, setHasMarks, syncButtons]);
 
-  return { canUndo, canRedo, hasMarks, recordChange, clearWithUndo, undo, redo, reset };
+  return { canUndo, canRedo, hasMarks, recordChange, discardUncommitted, clearWithUndo, undo, redo, reset };
 }

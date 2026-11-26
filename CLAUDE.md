@@ -17,6 +17,8 @@ stale (it says A4/A3 and mouse-only; the app now uses Letter and supports touch)
 - `app/hooks/useDrawingEngine.ts` — pointer input: native listeners, coalesced
   events, rAF batching. Delegates drawing to `lib/strokeRenderer.ts`.
 - `app/hooks/useUndoHistory.ts` — region-based undo/redo (backup canvas + patches).
+- `app/hooks/useZoom.ts` — zoom state, buttons, anchored zoom (scroll fix-up in useLayoutEffect).
+- `lib/twoFingerGesture.ts` — pure pan/pinch math (anchor point + zoom from finger distance).
 - `app/components/CanvasStack.tsx` — scroll container + stacked canvases.
 - `app/components/{DrawingTools,ViewControls,ExportControls}.tsx` — labeled
   toolbar groups (presentational; state comes in as props).
@@ -60,6 +62,16 @@ stale (it says A4/A3 and mouse-only; the app now uses Letter and supports touch)
   backup) / after (from live) patches of just that rect. Max 10 steps
   (decided with the owner). Clear stores `after: null`. Export/Clear use
   `hasMarks`, not `canUndo`, because history is capped.
+- Input state machine in `useDrawingEngine` (idle / drawing / gesture /
+  waitRelease). Mouse and pen always draw; touches during a pen/mouse stroke
+  are ignored (palm). A 2nd finger during a finger stroke cancels it via
+  `discardUncommitted` (backup -> live, no undo entry) and starts a gesture.
+  After a gesture, remaining fingers never draw until all lift.
+- Pan/pinch: at gesture start, remember the picture point (canvas px) under
+  the fingers' midpoint; each frame set zoom = base * distance ratio (after
+  a 6% dead zone so pure pans don't zoom) and scroll so that point stays
+  under the current midpoint. Current zoom is read from the DOM
+  (rect.width / canvas.width) so the engine needs no zoom ref.
 - Pen/eraser widths are in canvas pixels, so they look slightly thicker on
   photos that got capped (relative to the image) than before the cap.
 - Undo stacks live in refs (large, must not re-render); only `canUndo` /
