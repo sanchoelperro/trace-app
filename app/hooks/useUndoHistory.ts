@@ -29,8 +29,9 @@ export interface UndoHistory {
   hasMarks: boolean;
   /**
    * Increases on every change to the drawing (stroke, clear, undo, redo,
-   * reset). Comparing it with the value at save time tells whether the
-   * drawing has unsaved changes.
+   * reset). Comparing it with the value at the last PDF export tells
+   * whether the drawing has unexported changes. Updated once per change,
+   * never per pointermove.
    */
   revision: number;
   /** Same as `revision`, but current immediately (not after a re-render). */
@@ -46,12 +47,8 @@ export interface UndoHistory {
   clearWithUndo: () => void;
   undo: () => void;
   redo: () => void;
-  /**
-   * Forget all history; call after the drawing canvas was resized/reset or
-   * filled with a reopened drawing.
-   * @param hasMarks whether the canvas currently contains lines.
-   */
-  reset: (hasMarks?: boolean) => void;
+  /** Forget all history; call after the drawing canvas was resized/reset. */
+  reset: () => void;
 }
 
 /** Draw `data` into `ctx` at `rect`, or clear `rect` if `data` is null. */
@@ -208,7 +205,7 @@ export function useUndoHistory(canvasRef: RefObject<HTMLCanvasElement | null>): 
     syncButtons();
   }, [getContexts, setHasMarks, syncButtons]);
 
-  const reset = useCallback((marks = false) => {
+  const reset = useCallback(() => {
     undoStack.current = [];
     redoStack.current = [];
     // Recreate the backup NOW, while it can copy the current (fresh) canvas.
@@ -216,7 +213,7 @@ export function useUndoHistory(canvasRef: RefObject<HTMLCanvasElement | null>): 
     // stroke as the "before" state, making it impossible to undo.
     backupRef.current = null;
     getContexts();
-    setHasMarks(marks);
+    setHasMarks(false);
     syncButtons();
   }, [getContexts, setHasMarks, syncButtons]);
 

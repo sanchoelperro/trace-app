@@ -3,29 +3,25 @@
 import { useRef, useState } from "react";
 import { AutoTracePanel } from "./components/AutoTracePanel";
 import { CanvasStack } from "./components/CanvasStack";
+import { ConfirmDialog } from "./components/ConfirmDialog";
 import { DrawingTools } from "./components/DrawingTools";
 import { ExportControls } from "./components/ExportControls";
-import { ProjectControls } from "./components/ProjectControls";
-import { ProjectsDialog } from "./components/ProjectsDialog";
-import { BUTTON_PLAIN } from "./components/ui";
 import { ViewControls } from "./components/ViewControls";
 import { useAutoTrace } from "./hooks/useAutoTrace";
 import { useDrawingEngine, type DrawMode } from "./hooks/useDrawingEngine";
-import { useProjects } from "./hooks/useProjects";
 import { useUndoHistory } from "./hooks/useUndoHistory";
+import { useUnexportedWork } from "./hooks/useUnexportedWork";
 import { useZoom } from "./hooks/useZoom";
 import { capToLongSide } from "@/lib/canvasSize";
 import { exportDrawingPdf } from "@/lib/exportPdf";
 import { loadImageFromBlob } from "@/lib/loadImage";
 import { computeFitZoom, computePrintLayout, type Orientation, type Size } from "@/lib/printLayout";
-import { PROJECT_FILE_EXTENSION } from "@/lib/projectFile";
-import { mergeSettings, type ProjectSettings } from "@/lib/projectTypes";
 
 /**
  * The page owns the shared UI state and wires the pieces together:
  * toolbar groups (presentational), the canvas stack (DOM), the drawing
  * engine (pointer input), undo history (pixel patches), Auto-Trace and
- * projects (save/open/import/export).
+ * the "not exported yet" safety net.
  */
 export default function Home() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -42,8 +38,11 @@ export default function Home() {
   const [imgDimensions, setImgDimensions] = useState<Size>({ width: 0, height: 0 });
   const [orientation, setOrientation] = useState<Orientation>("portrait");
   const [fileName, setFileName] = useState("trace-drawing");
+  /** A newly picked photo waiting for "Replace anyway?" (null = no question open). */
+  const [pendingPhoto, setPendingPhoto] = useState<File | null>(null);
 
   const history = useUndoHistory(drawCanvasRef);
+  const unexported = useUnexportedWork(history);
   const zoom = useZoom(containerRef);
   const autoTrace = useAutoTrace({
     imageCanvasRef,
@@ -63,16 +62,16 @@ export default function Home() {
 
   /**
    * Put a photo on the reference canvas and size both canvases to it.
-   * Clears the drawing; the caller resets undo history afterwards.
+   * Clears the drawing and the undo history.
    */
-  const loadPhoto = async (photo: Blob): Promise<boolean> => {
+  const loadPhoto = async (photo: Blob): Promise<void> => {
     const img = await loadImageFromBlob(photo);
     autoTrace.cancel(); // a preview of the old photo would be meaningless
     const imageCanvas = imageCanvasRef.current;
     const drawCanvas = drawCanvasRef.current;
     const container = containerRef.current;
     const ctx = imageCanvas?.getContext("2d");
-    if (!imageCanvas || !drawCanvas || !container || !ctx) return false;
+    if (!imageCanvas || !drawCanvas || !container || !ctx) return;
 
     // Both canvases share one pixel size: the photo's, scaled down if its
     // long side exceeds the cap (see lib/canvasSize.ts for why). Setting
@@ -93,52 +92,22 @@ export default function Home() {
       computeFitZoom(size, { width: container.clientWidth, height: container.clientHeight })
     );
     setOrientation(size.width > size.height ? "landscape" : "portrait");
-    return true;
+    history.reset();
   };
-
-  const settings: ProjectSettings = {
-    opacity,
-    lineWidth,
-    eraserWidth,
-    smoothing,
-    orientation,
-    zoom: zoom.zoom,
-    fileName,
-    trace: autoTrace.params,
-  };
-
-  const applySettings = (incoming: ProjectSettings) => {
-    const s = mergeSettings(settings, incoming);
-    setOpacity(s.opacity);
-    setLineWidth(s.lineWidth);
-    setEraserWidth(s.eraserWidth);
-    setSmoothing(s.smoothing);
-    setOrientation(s.orientation);
-    setFileName(s.fileName);
-    autoTrace.setParams(s.trace);
-    zoom.zoomTo(s.zoom);
-  };
-
-  const projects = useProjects({
-    imageCanvasRef,
-    drawCanvasRef,
-    imageLoaded,
-    settings,
-    applySettings,
-    loadPhoto,
-    history,
-  });
 
   const handlePhotoChosen = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = ""; // allow picking the same file again later
-    if (file) await projects.startFromPhoto(file);
+    if (!file) return;
+    // Don't wipe a drawing that only exists on screen without asking first.
+    if (unexported.hasUnexportedWork) setPendingPhoto(file);
+    else await loadPhoto(file);
   };
 
-  const handleProjectFileChosen = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (file) await projects.importFile(file);
+  const confirmReplacePhoto = async () => {
+    const file = pendingPhoto;
+    setPendingPhoto(null);
+    if (file) await loadPhoto(file);
   };
 
   const layout = computePrintLayout(imgDimensions, orientation);
@@ -147,6 +116,7 @@ export default function Home() {
     const canvas = drawCanvasRef.current;
     if (!canvas) return;
     exportDrawingPdf(canvas, layout, orientation, fileName);
+    unexported.markExported();
   };
 
   return (
@@ -158,42 +128,12 @@ export default function Home() {
         </p>
       </div>
 
-      <div className="flex flex-wrap items-center justify-center gap-3">
-        <input
-          type="file"
-          accept="image/*"
-          onChange={handlePhotoChosen}
-          className="border border-gray-300 rounded-md p-2 bg-white"
-        />
-        <button onClick={projects.openList} disabled={projects.busy} className={BUTTON_PLAIN}>
-          Projects
-        </button>
-        {/* A <label> wrapping a hidden file input acts as a styled "choose file" button. */}
-        <label className={`${BUTTON_PLAIN} cursor-pointer`}>
-          Import project
-          <input
-            type="file"
-            accept={`application/json,.json,${PROJECT_FILE_EXTENSION}`}
-            onChange={handleProjectFileChosen}
-            className="hidden"
-          />
-        </label>
-      </div>
-
-      {projects.message && (
-        <div
-          className={`flex w-full max-w-4xl items-start justify-between gap-4 rounded-md border p-3 text-sm ${
-            projects.message.kind === "error"
-              ? "border-red-300 bg-red-50 text-red-700"
-              : "border-green-300 bg-green-50 text-green-700"
-          }`}
-        >
-          <span>{projects.message.text}</span>
-          <button onClick={projects.dismissMessage} className="text-gray-500" aria-label="Dismiss">
-            ×
-          </button>
-        </div>
-      )}
+      <input
+        type="file"
+        accept="image/*"
+        onChange={handlePhotoChosen}
+        className="border border-gray-300 rounded-md p-2 bg-white"
+      />
 
       {imageLoaded && (
         <div className="flex flex-col gap-4 bg-white border border-gray-300 rounded-md p-4 w-full max-w-4xl">
@@ -238,18 +178,15 @@ export default function Home() {
             onFileNameChange={setFileName}
             canExport={history.hasMarks}
             onExport={handleExportPdf}
+            hasUnexportedWork={unexported.hasUnexportedWork}
             layout={layout}
             orientation={orientation}
           />
-
-          <hr className="border-gray-200" />
-
-          <ProjectControls controls={projects} />
         </div>
       )}
 
       {!imageLoaded && (
-        <p className="text-gray-500 text-sm">Upload an image, or open a saved project, to get started</p>
+        <p className="text-gray-500 text-sm">Upload an image to get started</p>
       )}
 
       <CanvasStack
@@ -264,7 +201,13 @@ export default function Home() {
         mode={mode}
       />
 
-      <ProjectsDialog controls={projects} />
+      <ConfirmDialog
+        open={pendingPhoto !== null}
+        message="Your current drawing has not been exported to PDF. Replace it anyway?"
+        confirmLabel="Replace"
+        onConfirm={confirmReplacePhoto}
+        onCancel={() => setPendingPhoto(null)}
+      />
     </main>
   );
 }

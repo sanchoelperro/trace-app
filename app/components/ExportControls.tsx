@@ -6,11 +6,13 @@ export interface ExportControlsProps {
   onFileNameChange: (value: string) => void;
   canExport: boolean;
   onExport: () => void;
+  /** The drawing changed since the last export (shows the amber badge). */
+  hasUnexportedWork: boolean;
   layout: PrintLayout;
   orientation: Orientation;
 }
 
-/** "Export" toolbar group: PDF file name, export button, print-size note. */
+/** "Export" toolbar group: PDF file name, export button, export status, print-size note. */
 export function ExportControls(props: ExportControlsProps) {
   const { layout } = props;
 
@@ -39,6 +41,22 @@ export function ExportControls(props: ExportControlsProps) {
         >
           Export PDF
         </button>
+
+        {/* The main "don't lose it" signal: works on every device, iPad included. */}
+        {props.hasUnexportedWork ? (
+          <span
+            role="status"
+            className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800"
+          >
+            Not exported yet
+          </span>
+        ) : (
+          props.canExport && (
+            <span role="status" className="text-xs text-gray-500">
+              Exported
+            </span>
+          )
+        )}
       </div>
       <p className="text-xs text-gray-500 mt-2">
         Your tracing will print at {layout.widthMm.toFixed(0)}mm ×{" "}
