@@ -1,8 +1,8 @@
 # Trace & Paint App — Project Context
 
-> Updated after batch 2 and the Projects removal (branch
-> `chore/remove-projects-add-export-warning`). For code-level architecture
-> and the reasoning behind technical decisions, see `CLAUDE.md`.
+> Current as of 2026-11-27: batch 2 plus the Projects removal, all merged
+> into `main` and live. For code-level architecture and the reasoning behind
+> technical decisions, see `CLAUDE.md`.
 
 ## What This App Does
 A browser-based tool for tracing reference photos to prepare drawings for watercolor painting. The user uploads an image, traces over it on-screen with a mouse, finger or Apple Pencil (or lets Auto-Trace draw the lines first), then exports only the line tracing as a print-ready PDF on US Letter paper. The PDF is used to transfer the drawing onto watercolor paper before painting. Nothing is saved in the browser: the PDF is the only way to keep a drawing, so the app warns about work that hasn't been exported yet.
@@ -14,19 +14,19 @@ A browser-based tool for tracing reference photos to prepare drawings for waterc
 4. Trace over it (mouse click-drag, finger, or pen), with optional stroke smoothing
 5. Adjust line thickness, undo mistakes, erase as needed
 6. Zoom in for tricky details (buttons, or two-finger pinch/pan on iPad)
-7. Export ONLY the traced lines as a PDF on US Letter (portrait or landscape), fitted to the page and centered with the aspect ratio kept
+7. Export ONLY the traced lines as a PDF on US Letter (portrait or landscape), fitted to the page and centered with the aspect ratio kept. Until you do, the app shows "Not exported yet"; the PDF is the only saved copy
 8. Print the PDF and transfer the drawing onto watercolor paper (e.g., via graphite transfer)
 
 ## Tech Stack
 - **Framework:** Next.js 16 (App Router), React 19, TypeScript
 - **Build:** webpack (`next dev --webpack` / `next build --webpack`). Turbopack in Next 16.2.x does not compile the Auto-Trace Web Worker; can switch back after upgrading Next (see `CLAUDE.md`)
 - **Styling:** Tailwind CSS v4
-- **Hosting:** Vercel (pushing a branch creates a preview deployment)
+- **Hosting:** Vercel (pushing a branch creates a preview deployment; pushing `main` updates production)
 - **Backend:** None. Fully client-side; the photo never leaves the browser
 - **Drawing surface:** HTML5 Canvas. Three stacked layers: reference photo, transparent drawing layer, Auto-Trace preview layer (ignores input)
 - **PDF export:** jsPDF, US Letter
 - **Storage:** none. Work lives only on screen until exported to PDF
-- **Dependencies:** no new libraries added in batch 2. Ask before adding any
+- **Dependencies:** jsPDF is the only runtime library besides Next/React. Ask before adding any
 
 ## Input Methods
 - **Desktop mouse:** click-drag-release draws a line. Always draws.
@@ -48,7 +48,7 @@ A browser-based tool for tracing reference photos to prepare drawings for waterc
 | Orientation | Portrait or landscape Letter page |
 | Auto-Trace | Edge detection (Canny) runs in the background. Sliders: Detail, Smoothing, Remove specks, Line thickness. Blue live preview; Apply draws the lines onto the drawing as ONE undo step; Cancel discards |
 | Export to PDF | Traced lines only, on Letter, fitted and centered |
-| Unexported-work warning | Amber "Not exported yet" badge next to Export PDF whenever the drawing changed since the last export (works everywhere, incl. iPad). Picking a new photo asks "Replace anyway?" first. Desktop browsers also warn before closing/reloading the tab (iPad Safari doesn't support that) |
+| Unexported-work warning | Amber "Not exported yet" badge next to Export PDF whenever the drawing has lines that changed since the last export; grey "Exported" after exporting; nothing when the drawing is empty. Works everywhere, incl. iPad. Picking a new photo over unexported work asks "Your current drawing has not been exported to PDF. Replace it anyway?" (Cancel / Replace). Desktop browsers also warn before closing/reloading the tab (iPad Safari doesn't support that) |
 
 ## Confirmed Decisions
 - Paper: **US Letter** (replaces the original A4/A3 plan); fit to page, centered
@@ -57,23 +57,25 @@ A browser-based tool for tracing reference photos to prepare drawings for waterc
 - Canvas size cap: **3300 px** on the long side
 - Undo limit: **10 steps**
 - Build with **webpack** until the Turbopack worker bug is fixed
-- **No saved projects** (Phase 4 was removed by the owner). "Unexported" = drawing has marks and changed since the last PDF export, tracked with a revision counter, not pixel comparison
+- **No saved projects** (Phase 4 was removed by the owner on 2026-11-27). Don't reintroduce browser storage without asking
+- "Unexported" = drawing has marks and changed since the last PDF export, tracked with a revision counter, not pixel comparison. So undoing back to exactly the exported drawing still shows "Not exported yet" (accepted trade-off)
 
 ## Status
 - Batch 1 (v1): upload, opacity, pen, eraser, undo/redo, zoom, orientation, Letter PDF export, touch support.
-- Batch 2 (done, on `feature/batch-2`), one commit per phase:
+- Batch 2 (merged into `main` 2026-11-25), one commit per phase:
   - Phase 0: refactor (no behavior change)
   - Phase 1: smoother iPad drawing, stroke smoothing, region-based undo, 3300 px cap
   - Phase 2: two-finger pan/pinch-zoom
   - Phase 3: Auto-Trace
-  - Phase 4: saved projects + export/import (later removed; replaced by the unexported-work warning)
-- Tested on desktop by the owner and with an automated browser smoke test. **iPad testing still pending.**
+  - Phase 4: saved projects + export/import (later removed)
+- Projects removal + unexported-work warning (merged into `main` 2026-11-27, commit `b5b818c`).
+- Tested on desktop by the owner and with automated browser smoke tests. **iPad testing still pending** for batch 2 and the warning (check: badge after drawing, "Exported" after export, replace-photo prompt).
 
 ## Still Deferred / Ideas
-- Multiple reference images per project
+- Multiple reference images per drawing
 - Color-coded layers for complex subjects
 - Paper sizes other than Letter
 - Vector (editable) paths
 
 ## Development Approach
-Plan with Claude first, then build in phases on a feature branch: one commit per phase, build and lint must pass, and stop for owner testing before starting the next phase. Run locally with `npm run dev` (http://localhost:3000). Pushing the branch deploys a Vercel preview.
+Plan with Claude first, then build on a branch off `main` (one per change, e.g. `feature/...` or `chore/...`). Multi-phase work: one commit per phase, typecheck/lint/build must pass, and stop for owner testing before starting the next phase. Commit, push, merge and branch deletion only when the owner asks; when done, fast-forward `main`, push it, and delete the branch locally and on GitHub. No pull requests. Run locally with `npm run dev` (http://localhost:3000). Pushing a branch deploys a Vercel preview.
